@@ -58,7 +58,7 @@ services:
       soc-net:
         aliases:
           - wazuh.indexer
-      - traefik-net
+      traefik-net: {}
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:latest
@@ -68,7 +68,7 @@ services:
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
       SERVER_NAME: dashboards.group-awd.me
-    restart: always
+    #restart: always
     labels:
       - "traefik.docker.network=traefik-net"
       - "traefik.http.routers.dash.rule=Host(`dashboards.group-awd.me`)"
