@@ -48,7 +48,7 @@ services:
       cluster.name: soc
       node.name: opensearch-node1
       discovery.type: single-node
-      bootstrap.memory_lock: "true"
+      bootstrap.memory_lock: "false"
       OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD}
     ulimits:
