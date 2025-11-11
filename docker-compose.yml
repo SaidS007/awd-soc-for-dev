@@ -132,7 +132,7 @@ services:
       - soc-net
 
   postgres:
-    image: postgres:latest
+    image: postgres:16
     container_name: soc-postgres
     environment:
       POSTGRES_DB: thehive
