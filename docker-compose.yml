@@ -17,14 +17,11 @@ services:
       - --api.insecure=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      #- --entrypoints.websecure.address=:443
       - --entrypoints.web.address=:80
-      #- "--certificatesresolvers.local.certFile=/certs/tls.crt"
-      #- "--certificatesresolvers.local.keyFile=/certs/tls.key"
+      # Traefik TLS is expected to be géré par Dockploy / la plateforme (ne pas fournir de certificats ici).
     ports: ["80:80", "443:443"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./ssl:/certs
     networks:
       - traefik-net
       - soc-net
@@ -32,7 +29,7 @@ services:
   opensearch-node1:
     image: opensearchproject/opensearch:latest
     container_name: soc-opensearch
-    expose: 
+    expose:
       - 9200
     environment:
       cluster.name: soc
@@ -41,8 +38,8 @@ services:
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms1536m -Xmx1536m"
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
-      # Désactiver la sécurité pour le healthcheck interne
-      OPENSEARCH_SECURITY_DISABLED: "false"
+      # Laisser la sécurité par défaut ; tu peux activer/désactiver selon besoin.
+      # OPENSEARCH_SECURITY_DISABLED: "false"
     ulimits:
       memlock: {soft: -1, hard: -1}
       nofile:
@@ -51,35 +48,38 @@ services:
     volumes:
       - opensearch-data:/usr/share/opensearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u admin:g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE https://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health || exit 1"]
       interval: 60s
       timeout: 30s
       retries: 10
       start_period: 120s
     networks:
-      - soc-net
+      soc-net:
+        aliases:
+          - wazuh.indexer   # permet à wazuh/filebeat de résoudre 'wazuh.indexer'
+      - traefik-net
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:latest
     container_name: soc-dashboard-opensearch
     environment:
-      OPENSEARCH_HOSTS: '["https://opensearch-node1:9200"]'
+      # utiliser HTTP vers le nœud OpenSearch interne
+      OPENSEARCH_HOSTS: '["http://opensearch-node1:9200"]'
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
       SERVER_NAME: dashboards.group-awd.me
-      #SERVER_SSL_ENABLED: "true"
-      SERVER_SSL_CERTIFICATE: /cert.pem
-      SERVER_SSL_KEY: /key.pem
+      # Ne pas gérer SSL côté dashboards (Traefik le fait en frontal)
+      # SERVER_SSL_ENABLED: "false"
     restart: always
-    volumes:
-      - ./ssl/tls.crt:/cert.pem:ro
-      - ./ssl/tls.key:/key.pem:ro
+    # retirer les volumes de certificats ; Dockploy / Traefik gèrent TLS
+    # volumes:
+    #   - ./ssl/tls.crt:/cert.pem:ro
+    #   - ./ssl/tls.key:/key.pem:ro
     labels:
       - "traefik.docker.network=traefik-net"
-      #- "traefik.enable=true"
       - "traefik.http.routers.dash.rule=Host(`dashboards.group-awd.me`)"
       - "traefik.http.routers.dash.entrypoints=websecure"
-      - "traefik.http.routers.dash.tls.certresolver=local"
+      - "traefik.http.routers.dash.tls=true"
     depends_on:
       opensearch-node1:
         condition: service_healthy
@@ -91,18 +91,21 @@ services:
     image: wazuh/wazuh-manager:4.14.0
     container_name: soc-wazuh
     environment:
-      ELASTICSEARCH_HOSTS: "https://opensearch-node1:9200"
+      # pointer vers OpenSearch interne en HTTP
+      ELASTICSEARCH_HOSTS: "http://opensearch-node1:9200"
       ELASTICSEARCH_USERNAME: "admin"
       ELASTICSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
       ELASTICSEARCH_SSL_VERIFICATION_MODE: "none"
     volumes:
       - wazuh-data:/var/lib/wazuh
-      - ./ssl/tls.crt:/etc/pki/ca-trust/source/anchors/soc-ca.crt:ro
-    command: >
-      sh -c "
-      update-ca-trust &&
-      /entrypoint.sh
-      "
+      # ne pas monter de certificats internes si Traefik gère TLS
+      # - ./ssl/tls.crt:/etc/pki/ca-trust/source/anchors/soc-ca.crt:ro
+    # Ne pas overrider le CMD/ENTRYPOINT si l'image ne fournit pas /entrypoint.sh
+    # command: >
+    #   sh -c "
+    #   update-ca-trust &&
+    #   /entrypoint.sh
+    #   "
     depends_on:
       opensearch-node1:
         condition: service_healthy
@@ -110,7 +113,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.wazuh.rule=Host(`wazuh.group-awd.me`)"
       - "traefik.http.routers.wazuh.entrypoints=websecure"
-      - "traefik.http.routers.wazuh.tls.certresolver=local"
+      - "traefik.http.routers.wazuh.tls=true"
       - "traefik.http.services.wazuh.loadbalancer.server.port=55000"
       - "traefik.port=5050"
       - "traefik.docker.network=traefik-net"
@@ -127,20 +130,21 @@ services:
       THEHIVE_DB_USER: thehive
       THEHIVE_DB_PASSWORD: thehive123!
       THEHIVE_MASTER_KEY: socMasterKey123!
-      THEHIVE_ELASTICSEARCH_HOSTS: https://opensearch-node1:9200
-      THEHIVE_ELASTICSEARCH_SSL: "true"
-    volumes:
-      - ./ssl/tls.crt:/usr/local/share/ca-certificates/soc-ca.crt:ro
-    command: >
-      sh -c "
-      update-ca-certificates &&
-      /opt/thehive/bin/thehive
-      "
+      THEHIVE_ELASTICSEARCH_HOSTS: http://opensearch-node1:9200
+      THEHIVE_ELASTICSEARCH_SSL: "false"
+    # enlever le montage SSL et la commande update-ca-certificates
+    # volumes:
+    #   - ./ssl/tls.crt:/usr/local/share/ca-certificates/soc-ca.crt:ro
+    # command: >
+    #   sh -c "
+    #   update-ca-certificates &&
+    #   /opt/thehive/bin/thehive
+    #   "
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.hive.rule=Host(`thehive.group-awd.me`)"
       - "traefik.http.routers.hive.entrypoints=websecure"
-      - "traefik.http.routers.hive.tls.certresolver=local"
+      - "traefik.http.routers.hive.tls=true"
       - "traefik.docker.network=traefik-net"
       - "traefik.port=9000"
     depends_on: [postgres, opensearch-node1]
@@ -155,6 +159,7 @@ services:
       POSTGRES_DB: thehive
       POSTGRES_USER: thehive
       POSTGRES_PASSWORD: thehive123!
+    # Option: migrer le mount si tu utilises Postgres 18+ (voir notes ci-dessous)
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -180,10 +185,9 @@ services:
       GF_SERVER_ROOT_URL: https://grafana.group-awd.me
     labels:
       - "traefik.enable=true"
-      -  "traefik.frontend.rule=Host:grafana.group-awd.me"
-      #- "traefik.http.routers.graf.rule=Host(`grafana.group-awd.me`)"
-      #- "traefik.http.routers.graf.entrypoints=websecure"
-      #- "traefik.http.routers.graf.tls.certresolver=local"
+      - "traefik.http.routers.graf.rule=Host(`grafana.group-awd.me`)"
+      - "traefik.http.routers.graf.entrypoints=websecure"
+      - "traefik.http.routers.graf.tls=true"
       - "traefik.docker.network=traefik-net"
       - "traefik.port=9090"
     networks:
@@ -203,7 +207,8 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.minio.rule=Host(`minio.group-awd.me`)"
       - "traefik.http.routers.minio.entrypoints=websecure"
-      - "traefik.http.routers.minio.tls.certresolver=local"
+      - "traefik.http.routers.minio.tls=true"
+      - "traefik.http.services.minio.loadbalancer.server.port=9001"
       - "traefik.docker.network=traefik-net"
       - "traefik.port=9001"
     networks:
