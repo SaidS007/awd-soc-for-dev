@@ -1,4 +1,4 @@
-#version: '3.8'
+version: '3.8'
 
 networks:
   traefik-net:
@@ -11,18 +11,28 @@ services:
     image: traefik:latest
     container_name: traefik
     restart: always
+    env_file:
+      - .env
     command:
       - --providers.docker.network=traefik-net
       - --api.dashboard=true
-      - --api.insecure=true
+      # Attention : désactiver en prod si dashboard non sécurisé
+      - --api.insecure=false
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Si tu veux que Traefik fasse ACME lui-même, décommente ces lignes
+      # - --certificatesresolvers.le.acme.tlschallenge=true
+      # - --certificatesresolvers.le.acme.email=${TRAEFIK_EMAIL}
+      # - --certificatesresolvers.le.acme.storage=${TRAEFIK_ACME_STORAGE}
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # si ACME via Traefik, monte un volume pour acme.json
+      - traefik-letsencrypt:/letsencrypt
     networks:
       - traefik-net
       - soc-net
@@ -30,6 +40,8 @@ services:
   opensearch-node1:
     image: opensearchproject/opensearch:latest
     container_name: soc-opensearch
+    env_file:
+      - .env
     expose:
       - "9200"
     environment:
@@ -38,7 +50,7 @@ services:
       discovery.type: single-node
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms1536m -Xmx1536m"
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD}
     ulimits:
       memlock:
         soft: -1
@@ -63,17 +75,21 @@ services:
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:latest
     container_name: soc-dashboard-opensearch
+    env_file:
+      - .env
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch-node1:9200"]'
       OPENSEARCH_USERNAME: admin
-      OPENSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
-      SERVER_NAME: dashboards.group-awd.me
-    #restart: always
+      OPENSEARCH_PASSWORD: ${OPENSEARCH_PASSWORD}
+      SERVER_NAME: ${DOMAIN_DASHBOARDS}
+    restart: always
     labels:
       - "traefik.docker.network=traefik-net"
-      - "traefik.http.routers.dash.rule=Host(`dashboards.group-awd.me`)"
+      - "traefik.http.routers.dash.rule=Host(`${DOMAIN_DASHBOARDS}`)"
       - "traefik.http.routers.dash.entrypoints=websecure"
       - "traefik.http.routers.dash.tls=true"
+      # Si tu utilises le resolvers traefik ACME 'le'
+      # - "traefik.http.routers.dash.tls.certresolver=le"
     depends_on:
       opensearch-node1:
         condition: service_healthy
@@ -84,10 +100,12 @@ services:
   wazuh-manager:
     image: wazuh/wazuh-manager:4.14.0
     container_name: soc-wazuh
+    env_file:
+      - .env
     environment:
       ELASTICSEARCH_HOSTS: "http://opensearch-node1:9200"
       ELASTICSEARCH_USERNAME: "admin"
-      ELASTICSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
+      ELASTICSEARCH_PASSWORD: ${WAZUH_ES_PASSWORD}
       ELASTICSEARCH_SSL_VERIFICATION_MODE: "none"
     volumes:
       - wazuh-data:/var/lib/wazuh
@@ -96,7 +114,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.wazuh.rule=Host(`wazuh.group-awd.me`)"
+      - "traefik.http.routers.wazuh.rule=Host(`${DOMAIN_WAZUH}`)"
       - "traefik.http.routers.wazuh.entrypoints=websecure"
       - "traefik.http.routers.wazuh.tls=true"
       - "traefik.http.services.wazuh.loadbalancer.server.port=55000"
@@ -109,17 +127,19 @@ services:
   thehive:
     image: thehiveproject/thehive:latest
     container_name: soc-thehive
+    env_file:
+      - .env
     environment:
       THEHIVE_DB_HOST: postgres
-      THEHIVE_DB_NAME: thehive
-      THEHIVE_DB_USER: thehive
-      THEHIVE_DB_PASSWORD: thehive123!
+      THEHIVE_DB_NAME: ${POSTGRES_DB}
+      THEHIVE_DB_USER: ${POSTGRES_USER}
+      THEHIVE_DB_PASSWORD: ${POSTGRES_PASSWORD}
       THEHIVE_MASTER_KEY: socMasterKey123!
       THEHIVE_ELASTICSEARCH_HOSTS: http://opensearch-node1:9200
       THEHIVE_ELASTICSEARCH_SSL: "false"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.hive.rule=Host(`thehive.group-awd.me`)"
+      - "traefik.http.routers.hive.rule=Host(`${DOMAIN_HIVE}`)"
       - "traefik.http.routers.hive.entrypoints=websecure"
       - "traefik.http.routers.hive.tls=true"
       - "traefik.docker.network=traefik-net"
@@ -132,12 +152,15 @@ services:
       - soc-net
 
   postgres:
-    image: postgres:16
+    image: postgres
     container_name: soc-postgres
+    restart: always
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: thehive
-      POSTGRES_USER: thehive
-      POSTGRES_PASSWORD: thehive123!
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -158,12 +181,14 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: soc-grafana
+    env_file:
+      - .env
     environment:
-      GF_SERVER_DOMAIN: grafana.group-awd.me
-      GF_SERVER_ROOT_URL: https://grafana.group-awd.me
+      GF_SERVER_DOMAIN: ${DOMAIN_GRAFANA}
+      GF_SERVER_ROOT_URL: https://${DOMAIN_GRAFANA}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.graf.rule=Host(`grafana.group-awd.me`)"
+      - "traefik.http.routers.graf.rule=Host(`${DOMAIN_GRAFANA}`)"
       - "traefik.http.routers.graf.entrypoints=websecure"
       - "traefik.http.routers.graf.tls=true"
       - "traefik.docker.network=traefik-net"
@@ -175,15 +200,17 @@ services:
   minio:
     image: minio/minio:latest
     container_name: soc-minio
+    env_file:
+      - .env
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minio123456!
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - backups:/data
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.minio.rule=Host(`minio.group-awd.me`)"
+      - "traefik.http.routers.minio.rule=Host(`${DOMAIN_MINIO}`)"
       - "traefik.http.routers.minio.entrypoints=websecure"
       - "traefik.http.routers.minio.tls=true"
       - "traefik.http.services.minio.loadbalancer.server.port=9001"
@@ -214,3 +241,4 @@ volumes:
   postgres-data:
   prometheus-data:
   backups:
+  traefik-letsencrypt:
