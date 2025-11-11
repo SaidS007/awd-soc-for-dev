@@ -18,8 +18,9 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
-      # Traefik TLS is expected to be géré par Dockploy / la plateforme (ne pas fournir de certificats ici).
-    ports: ["80:80", "443:443"]
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -30,7 +31,7 @@ services:
     image: opensearchproject/opensearch:latest
     container_name: soc-opensearch
     expose:
-      - 9200
+      - "9200"
     environment:
       cluster.name: soc
       node.name: opensearch-node1
@@ -38,10 +39,10 @@ services:
       bootstrap.memory_lock: "true"
       OPENSEARCH_JAVA_OPTS: "-Xms1536m -Xmx1536m"
       OPENSEARCH_INITIAL_ADMIN_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
-      # Laisser la sécurité par défaut ; tu peux activer/désactiver selon besoin.
-      # OPENSEARCH_SECURITY_DISABLED: "false"
     ulimits:
-      memlock: {soft: -1, hard: -1}
+      memlock:
+        soft: -1
+        hard: -1
       nofile:
         soft: 65536
         hard: 65536
@@ -56,25 +57,18 @@ services:
     networks:
       soc-net:
         aliases:
-          - wazuh.indexer   # permet à wazuh/filebeat de résoudre 'wazuh.indexer'
+          - wazuh.indexer
       - traefik-net
 
   opensearch-dashboards:
     image: opensearchproject/opensearch-dashboards:latest
     container_name: soc-dashboard-opensearch
     environment:
-      # utiliser HTTP vers le nœud OpenSearch interne
       OPENSEARCH_HOSTS: '["http://opensearch-node1:9200"]'
       OPENSEARCH_USERNAME: admin
       OPENSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
       SERVER_NAME: dashboards.group-awd.me
-      # Ne pas gérer SSL côté dashboards (Traefik le fait en frontal)
-      # SERVER_SSL_ENABLED: "false"
     restart: always
-    # retirer les volumes de certificats ; Dockploy / Traefik gèrent TLS
-    # volumes:
-    #   - ./ssl/tls.crt:/cert.pem:ro
-    #   - ./ssl/tls.key:/key.pem:ro
     labels:
       - "traefik.docker.network=traefik-net"
       - "traefik.http.routers.dash.rule=Host(`dashboards.group-awd.me`)"
@@ -91,21 +85,12 @@ services:
     image: wazuh/wazuh-manager:4.14.0
     container_name: soc-wazuh
     environment:
-      # pointer vers OpenSearch interne en HTTP
       ELASTICSEARCH_HOSTS: "http://opensearch-node1:9200"
       ELASTICSEARCH_USERNAME: "admin"
       ELASTICSEARCH_PASSWORD: g/9ibHdzjfnbEvMYR6MN0UmxpB2zI5dE
       ELASTICSEARCH_SSL_VERIFICATION_MODE: "none"
     volumes:
       - wazuh-data:/var/lib/wazuh
-      # ne pas monter de certificats internes si Traefik gère TLS
-      # - ./ssl/tls.crt:/etc/pki/ca-trust/source/anchors/soc-ca.crt:ro
-    # Ne pas overrider le CMD/ENTRYPOINT si l'image ne fournit pas /entrypoint.sh
-    # command: >
-    #   sh -c "
-    #   update-ca-trust &&
-    #   /entrypoint.sh
-    #   "
     depends_on:
       opensearch-node1:
         condition: service_healthy
@@ -132,14 +117,6 @@ services:
       THEHIVE_MASTER_KEY: socMasterKey123!
       THEHIVE_ELASTICSEARCH_HOSTS: http://opensearch-node1:9200
       THEHIVE_ELASTICSEARCH_SSL: "false"
-    # enlever le montage SSL et la commande update-ca-certificates
-    # volumes:
-    #   - ./ssl/tls.crt:/usr/local/share/ca-certificates/soc-ca.crt:ro
-    # command: >
-    #   sh -c "
-    #   update-ca-certificates &&
-    #   /opt/thehive/bin/thehive
-    #   "
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.hive.rule=Host(`thehive.group-awd.me`)"
@@ -147,7 +124,9 @@ services:
       - "traefik.http.routers.hive.tls=true"
       - "traefik.docker.network=traefik-net"
       - "traefik.port=9000"
-    depends_on: [postgres, opensearch-node1]
+    depends_on:
+      - postgres
+      - opensearch-node1
     networks:
       - traefik-net
       - soc-net
@@ -159,7 +138,6 @@ services:
       POSTGRES_DB: thehive
       POSTGRES_USER: thehive
       POSTGRES_PASSWORD: thehive123!
-    # Option: migrer le mount si tu utilises Postgres 18+ (voir notes ci-dessous)
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
